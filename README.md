@@ -8,14 +8,15 @@ To use `stperf` you can simply copy `stperf.cpp` and `stperf.h` to your project 
 
 ##### Using CMake
 ```CMake
+include(FetchContent)
 FetchContent_Declare(
     stperf
     GIT_REPOSITORY https://github.com/lPrimemaster/stperf.git
-    GIT_TAG        v0.1.0
 )
 FetchContent_MakeAvailable(stperf)
 
 add_executable(<your-exec> <your-sources>)
+target_include_directories(<your-exec> PRIVATE ${stperf_SOURCE_DIR})
 target_link_libraries(<your-exec> PRIVATE stperf)
 ```
 Now you can just `#include <stperf.h>`
