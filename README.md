@@ -23,8 +23,8 @@ Now you can just `#include <stperf.h>`.
 
 All Done!
 ### How to use
-- [From C++](#From-C++)
-- [From C/CAPI](#From-C/CAPI)
+- [From C++](#from-c++)
+- [From C/CAPI](#from-c/capi)
 #### From C++
 Simply use the already defined preprocessor macros (in `stperf.h`) as the first statement on the function(s) you wish to profile.
 
