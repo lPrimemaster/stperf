@@ -19,7 +19,7 @@ add_executable(<your-exec> <your-sources>)
 target_include_directories(<your-exec> PRIVATE ${stperf_SOURCE_DIR})
 target_link_libraries(<your-exec> PRIVATE stperf)
 ```
-Now you can just `#include <stperf.h>`
+Now you can just `#include <stperf.h>`.
 
 All Done!
 ### How to use
