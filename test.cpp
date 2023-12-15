@@ -1,9 +1,13 @@
+// (c) 2023 César Godinho
+// This code is licensed under MIT license (see LICENSE for details)
+
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 #include "catch2/matchers/catch_matchers.hpp"
 #include "catch2/matchers/catch_matchers_container_properties.hpp"
 #include "stperf.h"
 #include <chrono>
+#include <cstdint>
 #include <thread>
 // #include <iostream>
 
@@ -39,9 +43,9 @@ void sleep_10_10()
 
 TEST_CASE("Empty Data", "[simple]")
 {
-    auto tree = cag::PerfTimer::GetCrunchedData();
+    auto tree = cag::PerfTimer::GetCallTree();
     REQUIRE(tree.size() == 0);
-    REQUIRE_THAT(cag::PerfTimer::GetStatistics(), Catch::Matchers::SizeIs(0));
+    REQUIRE_THAT(cag::PerfTimer::GetCallTreeString(cag::PerfTimer::GetCallTree()), Catch::Matchers::SizeIs(0));
 }
 
 TEST_CASE("Simple Scope Guard", "[simple][auto]")
@@ -51,7 +55,7 @@ TEST_CASE("Simple Scope Guard", "[simple][auto]")
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
-    auto tree = cag::PerfTimer::GetCrunchedData();
+    auto tree = cag::PerfTimer::GetCallTree();
     REQUIRE(tree.at(0)._hits == 1);
     REQUIRE(tree.at(0)._value > 10);
     REQUIRE(tree.at(0)._value < 11);
@@ -65,7 +69,7 @@ TEST_CASE("Simple Manual Trigger", "[simple][manual]")
     sleep_10_10();
     perfc->stop();
 
-    auto tree = cag::PerfTimer::GetCrunchedData();
+    auto tree = cag::PerfTimer::GetCallTree();
     REQUIRE(tree.at(0)._hits == 1);
     REQUIRE(tree.at(0)._value > 100);
     REQUIRE(tree.at(0)._value < 110);
@@ -82,7 +86,7 @@ TEST_CASE("Nested Scope Guard", "[nested][auto]")
         scoped_func();
     }
 
-    auto tree = cag::PerfTimer::GetCrunchedData();
+    auto tree = cag::PerfTimer::GetCallTree();
     REQUIRE(tree.at(0)._hits == 1);
     REQUIRE(tree.at(0)._children.size() == 1);
     REQUIRE(tree.at(0)._children.at(0)._hits == 3);
@@ -110,7 +114,7 @@ TEST_CASE("Nested Manual Trigger", "[nested][manual]")
         perfc->stop();
     }
 
-    auto tree = cag::PerfTimer::GetCrunchedData();
+    auto tree = cag::PerfTimer::GetCallTree();
     REQUIRE(tree.at(0)._hits == 1);
     REQUIRE(tree.at(0)._children.size() == 1);
     REQUIRE(tree.at(0)._children.at(0)._hits == 3);
@@ -130,7 +134,7 @@ TEST_CASE("Nested Function Call Scope Guard", "[nested][recurse][auto]")
     cag::PerfTimer::ResetCounters();
     recurse_auto(2);
 
-    auto tree = cag::PerfTimer::GetCrunchedData();
+    auto tree = cag::PerfTimer::GetCallTree();
     REQUIRE(tree.at(0)._hits == 1);
     REQUIRE(tree.at(0)._children.size() == 1);
     REQUIRE(tree.at(0)._children.at(0)._hits == 1);
@@ -151,7 +155,7 @@ TEST_CASE("Nested Function Call Manual", "[nested][recurse][manual]")
     cag::PerfTimer::ResetCounters();
     recurse_manual(10);
 
-    auto tree = cag::PerfTimer::GetCrunchedData();
+    auto tree = cag::PerfTimer::GetCallTree();
     REQUIRE(tree.at(0)._hits == 1);
     REQUIRE(tree.at(0)._children.size() == 1);
     REQUIRE(tree.at(0)._children.at(0)._hits == 1);
@@ -168,7 +172,7 @@ TEST_CASE("Reset Mid-counting", "[simple][auto]")
         cag::PerfTimer::ResetCounters();
     }
 
-    REQUIRE_THAT(cag::PerfTimer::GetStatistics(), Catch::Matchers::SizeIs(0));
+    REQUIRE_THAT(cag::PerfTimer::GetCallTreeString(cag::PerfTimer::GetCallTree()), Catch::Matchers::SizeIs(0));
 }
 
 TEST_CASE("As Function Argument", "[simple][auto]")
@@ -177,7 +181,7 @@ TEST_CASE("As Function Argument", "[simple][auto]")
 
     sleep_arg_return(sleep_return());
 
-    auto tree = cag::PerfTimer::GetCrunchedData();
+    auto tree = cag::PerfTimer::GetCallTree();
     REQUIRE(tree.size() == 2);
     REQUIRE(tree.at(0)._hits == 1);
     REQUIRE(tree.at(1)._hits == 1);
@@ -199,4 +203,28 @@ TEST_CASE("As Function Argument", "[simple][auto]")
 //     REQUIRE(tree.at(0)._children.empty());
 //     REQUIRE(tree.at(1)._children.empty());
 // }
+
+TEST_CASE("C API", "[capi][auto][simple]")
+{
+    stperf_ResetCounters();
+    uint64_t handle = stperf_StartProf("C Api Test", __LINE__, NULL);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+    stperf_StopProf(handle);
+    
+    stperf_PerfNodeList nodes = stperf_GetCallTree();
+    const char* report = stperf_GetCallTreeString(nodes);
+
+    REQUIRE(nodes._size == 1);
+    REQUIRE_THAT(nodes._elements[0]->_name, Catch::Matchers::Equals("C Api Test"));
+    REQUIRE(nodes._elements[0]->_hits == 1);
+    REQUIRE(nodes._elements[0]->_children._size == 0);
+    REQUIRE(nodes._elements[0]->_children._elements == nullptr);
+    REQUIRE(nodes._elements[0]->_indent == 0);
+    REQUIRE(static_cast<cag::PerfNode::Granularity>(nodes._elements[0]->_granularity) == cag::PerfNode::Granularity::MS);
+
+    stperf_FreeCallTreeString(report);
+    stperf_FreeCallTree(nodes);
+}
 

@@ -1,4 +1,8 @@
+// (c) 2023 César Godinho
+// This code is licensed under MIT license (see LICENSE for details)
+
 #include <chrono>
+#include <cstdint>
 #include <string>
 #include <stack>
 #include <vector>
@@ -42,8 +46,8 @@ namespace cag
     public:
         static std::shared_ptr<PerfTimer> MakePerfTimer(const std::string& name, int line, const std::string& suffix = "");
         static void ResetCounters();
-        static std::string GetStatistics(bool debug = false);
-        static std::vector<PerfNode> GetCrunchedData();
+        static std::string GetCallTreeString(const std::vector<PerfNode>& tree);
+        static std::vector<PerfNode> GetCallTree();
         void start();
         void stop();
     };
@@ -62,6 +66,34 @@ namespace cag
     PerfNode::Granularity FindCommonGranularity(PerfNode::Granularity g1, PerfNode::Granularity g2);
     float NanosToValue(PerfNode::Granularity g, std::uint64_t t);
 }
+
+extern "C" struct stperf_PerfNode;
+
+extern "C" struct stperf_PerfNodeList
+{
+    stperf_PerfNode** _elements;
+    uint64_t          _size;
+};
+
+extern "C" struct stperf_PerfNode
+{
+    int      _granularity;
+    float    _value;
+    float    _pct;
+    uint64_t _nanos;
+    char     _name[128]; // NOTE : Names will get cropped in C if more than 128 chars long
+    int      _indent;
+    uint64_t _hits;
+    stperf_PerfNodeList _children;
+};
+
+extern "C" uint64_t            stperf_StartProf(const char* name, int line, const char* suffix);
+extern "C" void                stperf_StopProf(uint64_t handle);
+extern "C" stperf_PerfNodeList stperf_GetCallTree();
+extern "C" const char*         stperf_GetCallTreeString(stperf_PerfNodeList tree);
+extern "C" void                stperf_FreeCallTreeString(const char* string);
+extern "C" void                stperf_FreeCallTree(stperf_PerfNodeList root);
+extern "C" void                stperf_ResetCounters();
 
 #define _CAT_NAME(x,y) x##y
 #define CAT_NAME(x,y) _CAT_NAME(x,y)

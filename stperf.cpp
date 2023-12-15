@@ -1,7 +1,15 @@
+// (c) 2023 César Godinho
+// This code is licensed under MIT license (see LICENSE for details)
+
 #include "stperf.h"
+#include <cstdint>
+#include <cstring>
+#include <functional>
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <sstream>
+#include <sys/types.h>
 #include <type_traits>
 #include <unordered_map>
 #include <numeric>
@@ -229,7 +237,7 @@ static void CalculateTreeRelativePct(cag::PerfNode& root, std::vector<cag::PerfN
     }
 }
 
-std::vector<cag::PerfNode> cag::PerfTimer::GetCrunchedData()
+std::vector<cag::PerfNode> cag::PerfTimer::GetCallTree()
 {
     if(_parents.empty()) return std::vector<cag::PerfNode>();
 
@@ -257,24 +265,161 @@ std::vector<cag::PerfNode> cag::PerfTimer::GetCrunchedData()
     return output;
 }
 
-std::string cag::PerfTimer::GetStatistics(bool debug)
+std::string cag::PerfTimer::GetCallTreeString(const std::vector<PerfNode>& tree)
 {
     std::stringstream ss;
-    std::vector<PerfNode> data;
-    
-    if(!debug)
-    {
-        // TODO : GetCrunchedData should set a cached value
-        data = GetCrunchedData();
-    }
-    else
-    {
-        data = _parents;
-    }
 
-    for(const auto& node : data)
+    for(const auto& node : tree)
     { 
         GetStatisticsFullInternal(ss, node);
     }
     return ss.str();
 }
+
+
+// =================================
+// C API
+// =================================
+static std::unordered_map<std::uint64_t, std::shared_ptr<cag::PerfTimer>> perf_timers;
+
+extern "C" uint64_t stperf_StartProf(const char* name, int line, const char* suffix)
+{
+    std::uint64_t sid = std::hash<std::string>()(name);
+    std::string isuffix = suffix != nullptr ? suffix : "";
+    auto perf_timer = cag::PerfTimer::MakePerfTimer(std::string(name), line, isuffix);
+    perf_timers.emplace(sid, perf_timer);
+    perf_timer->start();
+    return sid;
+}
+
+extern "C" void stperf_StopProf(uint64_t handle)
+{
+    auto perf_timer = perf_timers.find(handle);
+    
+    // Exit silently (no error)
+    if(perf_timer == perf_timers.end()) return; 
+    
+    perf_timer->second->stop();
+}
+
+static stperf_PerfNode* ToCHeapNode(const cag::PerfNode& node)
+{
+    stperf_PerfNode* heap_node = new stperf_PerfNode();
+    
+    using UnderlyingType = std::underlying_type<cag::PerfNode::Granularity>::type;
+    heap_node->_granularity = static_cast<UnderlyingType>(node._granularity);
+    memcpy(heap_node->_name, node._name.c_str(), std::min(sizeof(heap_node->_name), node._name.size() + 1));
+    heap_node->_indent = node._indent;
+    heap_node->_nanos  = node._nanos;
+    heap_node->_value  = node._value;
+    heap_node->_pct    = node._pct;
+    heap_node->_hits   = node._hits;
+
+    heap_node->_children._size = node._children.size();
+    if(heap_node->_children._size == 0)
+    {
+        heap_node->_children._elements = nullptr;
+        return heap_node;
+    }
+
+    heap_node->_children._elements = new stperf_PerfNode*[heap_node->_children._size];
+    if(heap_node->_children._elements == nullptr)
+    {
+        // Silently ignore
+        heap_node->_children._size = 0;
+        return heap_node;
+    }
+
+    for(uint64_t i = 0; i < heap_node->_children._size; i++)
+    {
+        heap_node->_children._elements[i] = ToCHeapNode(node._children[i]);
+    }
+
+    return heap_node;
+}
+
+extern "C" stperf_PerfNodeList stperf_GetCallTree()
+{
+    stperf_PerfNodeList croot = { nullptr, 0 };
+
+    auto root_nodes = cag::PerfTimer::GetCallTree();
+    
+    if(root_nodes.size() == 0) return croot;
+
+    croot._size = root_nodes.size();
+    croot._elements = new stperf_PerfNode*[croot._size];
+    // Silently ignore
+    if(croot._elements == nullptr) return { nullptr, 0 };
+
+    for(uint64_t i = 0; i < croot._size; i++)
+    {
+        croot._elements[i] = ToCHeapNode(root_nodes[i]); 
+    }
+    
+    return croot;
+}
+
+static void CPerfNodeSS(stperf_PerfNode node, std::stringstream& ss)
+{
+    // Indent this node from parent count
+    for(int i = 0; i < node._indent; i++) ss << '\t';
+    
+    // Print stats
+    ss << "-> [" << node._name;
+    if(node._hits > 0) ss << " | x" << node._hits;
+    ss << "] Execution time : ";
+    ss << node._value << cag::PerfNode::_time_suffix.at(static_cast<cag::PerfNode::Granularity>(node._granularity)) << " (";
+    const auto default_precision = std::cout.precision();
+    ss << std::setw(3) << std::setprecision(4) << 100 * node._pct << std::setprecision(default_precision) << "%).";
+    ss << std::endl;
+}
+
+static void CPerfNodeListSS(stperf_PerfNodeList list, std::stringstream& ss)
+{
+    for(uint64_t i = 0; i < list._size; i++)
+    {
+        CPerfNodeSS(*list._elements[i], ss);
+        if(list._elements[i]->_children._size != 0) CPerfNodeListSS(list, ss);
+    }
+}
+
+extern "C" const char* stperf_GetCallTreeString(stperf_PerfNodeList tree)
+{
+    std::stringstream ss;
+
+    for(uint64_t i = 0; i < tree._size; i++)
+    {
+        CPerfNodeSS(*tree._elements[i], ss);
+        if(tree._elements[i]->_children._size != 0) CPerfNodeListSS(tree, ss);
+    }
+
+    char* output = new char[ss.str().size() + 1];
+    // Silently ignore
+    if(output == nullptr) return nullptr;
+    memcpy(output, ss.str().c_str(), ss.str().size() + 1);
+    return output;
+}
+
+extern "C" void stperf_FreeCallTreeString(const char* string)
+{
+    if(string != nullptr) delete[] string;
+}
+
+extern "C" void stperf_FreeCallTree(stperf_PerfNodeList root)
+{
+    if(root._size != 0 && root._elements != nullptr)
+    {
+        for(uint64_t i = 0; i < root._size; i++)
+        {
+            stperf_FreeCallTree(root._elements[i]->_children);
+            delete root._elements[i];
+        }
+        delete[] root._elements;
+    }
+}
+
+extern "C" void stperf_ResetCounters()
+{
+    cag::PerfTimer::ResetCounters();
+}
+
