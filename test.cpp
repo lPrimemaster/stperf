@@ -9,7 +9,7 @@
 #include <chrono>
 #include <cstdint>
 #include <thread>
-// #include <iostream>
+#include <iostream>
 
 void sleep_simple()
 {
@@ -226,5 +226,47 @@ TEST_CASE("C API", "[capi][auto][simple]")
 
     stperf_FreeCallTreeString(report);
     stperf_FreeCallTree(nodes);
+}
+
+// Can also be a lambda function
+int func_to_profile(int arg)
+{
+    ST_PROF;
+    // ... function code ...
+    return arg;
+}
+
+int func_partial_profile(int arg)
+{
+    ST_PROF;
+    {
+        ST_PROF_NAMED("partial_scope_1"); // this profiles until scope end
+        // ...
+    }
+
+    for(int i = 0; i < 10; i++)
+    {
+        ST_PROF_NAMED("partial_scope_for"); // again until the end of scope
+        // ...
+    }
+    // if using st_prof multiple times inside the same functin it will have the same name
+    // using ST_PROF_NAMED is advised for these cases (you can use __func__ for more specific names eg.)
+    return arg;
+}
+
+
+TEST_CASE("Readme Print", "[auto][simple]")
+{
+    // We need to make a scope to be able to see the statistics here
+    // Alternatively, you can call start/stop manually
+    // Refer to the docs
+    {
+        ST_PROF;
+        (void)func_to_profile(0);
+        (void)func_partial_profile(0);
+    }
+
+    // Print performance statistics
+    std::cout << cag::PerfTimer::GetCallTreeString(cag::PerfTimer::GetCallTree()) << std::endl;
 }
 
