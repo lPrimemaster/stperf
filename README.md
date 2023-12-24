@@ -1,6 +1,8 @@
 # STPerf
-A tiny C/C++ performance profiling tool. Native in C++11. It's C-API allows for its implementation in almost any environment.
-> ⚠️ This lib is not thread safe. (yet)
+A tiny C/C++ performance profiling tool. Written in C++11. Its C-API allows for an implementation in almost any environment.
+
+> :warning: `stperf` is now thread safe! See `test.cpp` for examples.
+
 ### Installing
 ##### Directly
 To use `stperf` you can simply copy `stperf.cpp` and `stperf.h` to your project if you have a C++11 compliant compiler. Done!

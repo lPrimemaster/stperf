@@ -8,14 +8,17 @@
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <sstream>
+#include <stack>
 #include <sys/types.h>
+#include <thread>
 #include <type_traits>
-#include <unordered_map>
 #include <numeric>
 #include <type_traits>
+#include <vector>
 
-// TODO : The _scope_stack can be made as of per thread.
+// TODO : (César) Thread parent (init) is not known with this approach
 
 // =================================
 // PerfNode
@@ -47,6 +50,7 @@ void cag::PerfNode::print(std::stringstream& ss) const
 // =================================
 decltype(cag::PerfTimer::_scope_stack) cag::PerfTimer::_scope_stack;
 decltype(cag::PerfTimer::_parents) cag::PerfTimer::_parents;
+decltype(cag::PerfTimer::_scope_stack_guard) cag::PerfTimer::_scope_stack_guard;
 
 cag::PerfTimer::PerfTimer(const std::string& name,
                               int line,
@@ -64,12 +68,17 @@ void cag::PerfTimer::stop()
 {
     // Stack is invalid (Maybe a reset call was issued during this prof)
     if(_scope_stack.empty()) return;
+    auto thread_stack_it = _scope_stack.find(std::this_thread::get_id());
+    
+    // Stack is valid but it was not initialized on this thread
+    if(thread_stack_it == _scope_stack.end()) return;
+    auto& thread_stack = thread_stack_it->second;
 
     const std::uint64_t ellapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::high_resolution_clock::now() - _tp
     ).count();
 
-    PerfNode* const top_node = _scope_stack.top();
+    PerfNode* const top_node = thread_stack.top();
     
     // Find time and data
     const auto granularity = FindTimeGranularity(ellapsed);
@@ -77,29 +86,38 @@ void cag::PerfTimer::stop()
     top_node->_value = NanosToValue(granularity, ellapsed);
     top_node->_nanos = ellapsed;
     top_node->_name = _scope_name;
-    top_node->_indent = static_cast<int>(_scope_stack.size()) - 1;
+    top_node->_indent = static_cast<int>(thread_stack.size()) - 1;
     
     delLeaf();
 }
 
 void cag::PerfTimer::addLeaf() const
 {
-    if(_scope_stack.empty())
+    if(_scope_stack.find(std::this_thread::get_id()) == _scope_stack.end())
     {
-        _parents.emplace_back();
-        _scope_stack.push(&_parents.back());
+        std::lock_guard<std::mutex> lock(_scope_stack_guard);
+        _scope_stack.emplace(std::this_thread::get_id(), std::stack<PerfNode*>());
+        _parents.emplace(std::this_thread::get_id(), std::vector<PerfNode>());
+    }
+    auto& thread_stack = _scope_stack.at(std::this_thread::get_id());
+    auto& thread_parents = _parents.at(std::this_thread::get_id());
+
+    if(thread_stack.empty())
+    {
+        thread_parents.emplace_back();
+        thread_stack.push(&thread_parents.back());
     }
     else
     {
-        PerfNode* const top = _scope_stack.top();
+        PerfNode* const top = thread_stack.top();
         top->_children.emplace_back();
-        _scope_stack.push(&top->_children.back());
+        thread_stack.push(&top->_children.back());
     }
 }
 
 void cag::PerfTimer::delLeaf() const
 {
-    _scope_stack.pop();
+    _scope_stack.at(std::this_thread::get_id()).pop();
 }
 
 cag::PerfNode::Granularity cag::FindTimeGranularity(std::uint64_t t)
@@ -137,6 +155,18 @@ std::shared_ptr<cag::PerfTimer> cag::PerfTimer::MakePerfTimer(const std::string&
     return std::shared_ptr<PerfTimer>(new PerfTimer(name, line, suffix));
 }
 
+static std::uint64_t GetThreadIdSFF(const std::thread::id& id)
+{
+    static std::unordered_map<std::thread::id, std::uint64_t> sff_id;
+    static std::uint64_t inc = 0ULL;
+    
+    auto sid = sff_id.find(id);
+    if(sid != sff_id.end()) return sid->second;
+
+    sff_id.emplace(id, inc);
+    return inc++;
+}
+
 static void GetStatisticsFullInternal(std::stringstream& ss, const cag::PerfNode& node)
 {
     node.print(ss);
@@ -148,9 +178,10 @@ static void GetStatisticsFullInternal(std::stringstream& ss, const cag::PerfNode
 
 void cag::PerfTimer::ResetCounters()
 {
-    // Invalidate storage and ptr stack
+    // Invalidate storage and ptr stack for all threads
+    std::lock_guard<std::mutex> lock(_scope_stack_guard);
     _parents.clear();
-    while(!_scope_stack.empty()) _scope_stack.pop();
+    _scope_stack.clear();
 }
 
 static cag::PerfNode ReduceChildren(const std::vector<std::vector<cag::PerfNode>::const_iterator>& nodes)
@@ -237,41 +268,55 @@ static void CalculateTreeRelativePct(cag::PerfNode& root, std::vector<cag::PerfN
     }
 }
 
-std::vector<cag::PerfNode> cag::PerfTimer::GetCallTree()
+std::unordered_map<std::thread::id, std::vector<cag::PerfNode>> cag::PerfTimer::GetCallTree()
 {
-    if(_parents.empty()) return std::vector<cag::PerfNode>();
+    using RType = std::unordered_map<std::thread::id, std::vector<cag::PerfNode>>;
+    if(_parents.empty()) return RType();
 
-    std::vector<cag::PerfNode> crunched_data;
-    crunched_data.reserve(_parents.size());
-    for(const auto& parent : _parents)
-    {
-        crunched_data.push_back(ComputeNodesCollapse(parent));
-        auto& root = crunched_data.back();
-        root._pct = CalculateRootRelativePct(root, root);
-        CalculateTreeRelativePct(root, root._children);
-    }
-
-    // Now crunch the parents (root might not be main/called only once)
-    auto storage = ComputeTreeLevelMap(crunched_data);
+    RType output;
     
-    // Iterate over each unique parent type
-    std::vector<cag::PerfNode> output;
-    for(auto& kv : storage)
+    for(auto& thread_parents : _parents)
     {
-        cag::PerfNode reduced = ReduceChildren(kv.second);
-        output.push_back(reduced);
-    }
+        if(thread_parents.second.empty()) output.emplace(thread_parents.first, std::vector<cag::PerfNode>());
 
+        std::vector<cag::PerfNode> crunched_data;
+        crunched_data.reserve(thread_parents.second.size());
+        for(const auto& parent : thread_parents.second)
+        {
+            // NOTE: (César) Not sure if this is useful here or not
+            std::lock_guard<std::mutex> lock(_scope_stack_guard);
+
+            crunched_data.push_back(ComputeNodesCollapse(parent));
+            auto& root = crunched_data.back();
+            root._pct = CalculateRootRelativePct(root, root);
+            CalculateTreeRelativePct(root, root._children);
+        }
+
+        // Now crunch the parents (root might not be main/called only once)
+        auto storage = ComputeTreeLevelMap(crunched_data);
+        
+        // Iterate over each unique parent type
+        std::vector<cag::PerfNode> thread_tree;
+        for(auto& kv : storage)
+        {
+            cag::PerfNode reduced = ReduceChildren(kv.second);
+            thread_tree.push_back(reduced);
+        }
+        output.emplace(thread_parents.first, thread_tree);
+    }
     return output;
 }
 
-std::string cag::PerfTimer::GetCallTreeString(const std::vector<PerfNode>& tree)
+std::string cag::PerfTimer::GetCallTreeString(const std::unordered_map<std::thread::id, std::vector<PerfNode>>& tree)
 {
     std::stringstream ss;
-
-    for(const auto& node : tree)
-    { 
-        GetStatisticsFullInternal(ss, node);
+    for(const auto& thread_root : tree)
+    {
+        ss << "[Thread - " << GetThreadIdSFF(thread_root.first) << "]" << std::endl;
+        for(const auto& node : thread_root.second)
+        { 
+            GetStatisticsFullInternal(ss, node);
+        }
     }
     return ss.str();
 }
@@ -284,7 +329,7 @@ static std::unordered_map<std::uint64_t, std::shared_ptr<cag::PerfTimer>> perf_t
 
 extern "C" uint64_t stperf_StartProf(const char* name, int line, const char* suffix)
 {
-    std::uint64_t sid = std::hash<std::string>()(name);
+    std::uint64_t sid = std::hash<std::string>()(name); // BUG: (César) This could have collisions
     std::string isuffix = suffix != nullptr ? suffix : "";
     auto perf_timer = cag::PerfTimer::MakePerfTimer(std::string(name), line, isuffix);
     perf_timers.emplace(sid, perf_timer);
@@ -338,25 +383,53 @@ static stperf_PerfNode* ToCHeapNode(const cag::PerfNode& node)
     return heap_node;
 }
 
-extern "C" stperf_PerfNodeList stperf_GetCallTree()
+extern "C" stperf_PerfNodeThreadList stperf_GetCallTree()
 {
-    stperf_PerfNodeList croot = { nullptr, 0 };
+    stperf_PerfNodeThreadList output = { nullptr, 0 };
 
     auto root_nodes = cag::PerfTimer::GetCallTree();
     
-    if(root_nodes.size() == 0) return croot;
+    if(root_nodes.size() == 0) return output;
 
-    croot._size = root_nodes.size();
-    croot._elements = new stperf_PerfNode*[croot._size];
+    output._size = root_nodes.size();
+    output._elements = new stperf_PerfNodeList[output._size];
+
     // Silently ignore
-    if(croot._elements == nullptr) return { nullptr, 0 };
-
-    for(uint64_t i = 0; i < croot._size; i++)
+    if(output._elements == nullptr) return output;
+    
+    size_t n = 0;
+    for(auto& root_thread_nodes : root_nodes)
     {
-        croot._elements[i] = ToCHeapNode(root_nodes[i]); 
+        stperf_PerfNodeList croot = { nullptr, 0, GetThreadIdSFF(root_thread_nodes.first) };
+        croot._size = root_thread_nodes.second.size();
+
+        if(croot._size > 0)
+        {
+            croot._elements = new stperf_PerfNode*[croot._size];
+
+            // Silently ignore
+            if(croot._elements != nullptr)
+            {
+                for(uint64_t i = 0; i < croot._size; i++)
+                {
+                    croot._elements[i] = ToCHeapNode(root_thread_nodes.second[i]); 
+                }
+            }
+        }
+        output._elements[n++] = croot;
     }
     
-    return croot;
+    return output;
+}
+
+extern "C" stperf_PerfNodeList* stperf_GetThreadRoot(const stperf_PerfNodeThreadList* tree, uint64_t tid)
+{
+    if(tree->_size == 0) return nullptr;
+    for(uint64_t i = 0; i < tree->_size; i++)
+    {
+        if(tree->_elements[i]._thread_id == tid) return &tree->_elements[i];
+    }
+    return nullptr;
 }
 
 static void CPerfNodeSS(stperf_PerfNode node, std::stringstream& ss)
@@ -379,24 +452,39 @@ static void CPerfNodeListSS(stperf_PerfNodeList list, std::stringstream& ss)
     for(uint64_t i = 0; i < list._size; i++)
     {
         CPerfNodeSS(*list._elements[i], ss);
-        if(list._elements[i]->_children._size != 0) CPerfNodeListSS(list, ss);
+        if(list._elements[i]->_children._size != 0) CPerfNodeListSS(list._elements[i]->_children, ss);
     }
 }
 
-extern "C" const char* stperf_GetCallTreeString(stperf_PerfNodeList tree)
+static std::string GetCallTreeString(stperf_PerfNodeList tree)
 {
     std::stringstream ss;
-
     for(uint64_t i = 0; i < tree._size; i++)
     {
+        ss << "[Thread - " << tree._thread_id << "]" << std::endl;
         CPerfNodeSS(*tree._elements[i], ss);
-        if(tree._elements[i]->_children._size != 0) CPerfNodeListSS(tree, ss);
+        if(tree._elements[i]->_children._size != 0) CPerfNodeListSS(tree._elements[i]->_children, ss);
+    }
+    return ss.str();
+}
+
+extern "C" const char* stperf_GetCallTreeString(stperf_PerfNodeThreadList tree)
+{
+    std::stringstream ss;
+    std::vector<std::string> output_vec;
+    output_vec.reserve(tree._size);
+    for(uint64_t i = 0; i < tree._size; i++)
+    {
+        output_vec.push_back(GetCallTreeString(tree._elements[i]));
     }
 
-    char* output = new char[ss.str().size() + 1];
+    std::string output_s;
+    for (const auto& s : output_vec) output_s += s;
+
+    char* output = new char[output_s.size() + 1];
     // Silently ignore
     if(output == nullptr) return nullptr;
-    memcpy(output, ss.str().c_str(), ss.str().size() + 1);
+    memcpy(output, output_s.c_str(), output_s.size() + 1);
     return output;
 }
 
@@ -405,21 +493,35 @@ extern "C" void stperf_FreeCallTreeString(const char* string)
     if(string != nullptr) delete[] string;
 }
 
-extern "C" void stperf_FreeCallTree(stperf_PerfNodeList root)
+static void FreeCallTreeList(stperf_PerfNodeList root)
 {
     if(root._size != 0 && root._elements != nullptr)
     {
         for(uint64_t i = 0; i < root._size; i++)
         {
-            stperf_FreeCallTree(root._elements[i]->_children);
+            FreeCallTreeList(root._elements[i]->_children);
             delete root._elements[i];
         }
         delete[] root._elements;
     }
 }
 
+extern "C" void stperf_FreeCallTree(stperf_PerfNodeThreadList tree)
+{
+    for(uint64_t i = 0; i < tree._size; i++)
+    {
+        FreeCallTreeList(tree._elements[i]);
+    }
+}
+
 extern "C" void stperf_ResetCounters()
 {
     cag::PerfTimer::ResetCounters();
+}
+
+
+extern "C" uint64_t stperf_GetCurrentThreadId()
+{
+    return GetThreadIdSFF(std::this_thread::get_id());
 }
 

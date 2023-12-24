@@ -19,6 +19,6 @@ if(${CMAKE_SOURCE_DIR} STREQUAL ${CMAKE_CURRENT_SOURCE_DIR})
     
     # include(CTest)
     add_executable(stperf-test test.cpp)
-    target_link_libraries(stperf-test PRIVATE stperf Catch2::Catch2WithMain)
+    target_link_libraries(stperf-test PRIVATE stperf pthread Catch2::Catch2WithMain)
     # add_test(NAME TestSuite COMMAND stperf-test)
 endif()

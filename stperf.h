@@ -3,10 +3,13 @@
 
 #include <chrono>
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <stack>
+#include <thread>
 #include <vector>
 #include <map>
+#include <unordered_map>
 #include <memory>
 #include <sstream>
 
@@ -27,6 +30,12 @@ namespace cag
         void print(std::stringstream& ss) const;
     };
 
+    // class CallTree : public std::unordered_map<std::thread::id, std::vector<PerfNode>>
+    // {
+    // public:
+    //     std::vector<PerfNode>& get_current_thread()
+    // };
+
     class PerfTimer
     {
     private:
@@ -37,8 +46,9 @@ namespace cag
         std::chrono::high_resolution_clock::time_point _tp;
         std::string _scope_name;
         int _line;
-        static std::stack<PerfNode*> _scope_stack;
-        static std::vector<PerfNode> _parents;
+        static std::unordered_map<std::thread::id, std::stack<PerfNode*>> _scope_stack;
+        static std::unordered_map<std::thread::id, std::vector<PerfNode>> _parents;
+        static std::mutex _scope_stack_guard;
     
         void addLeaf() const;
         void delLeaf() const;
@@ -46,8 +56,8 @@ namespace cag
     public:
         static std::shared_ptr<PerfTimer> MakePerfTimer(const std::string& name, int line, const std::string& suffix = "");
         static void ResetCounters();
-        static std::string GetCallTreeString(const std::vector<PerfNode>& tree);
-        static std::vector<PerfNode> GetCallTree();
+        static std::string GetCallTreeString(const std::unordered_map<std::thread::id, std::vector<PerfNode>>& tree);
+        static std::unordered_map<std::thread::id, std::vector<PerfNode>> GetCallTree();
         void start();
         void stop();
     };
@@ -73,6 +83,13 @@ extern "C" struct stperf_PerfNodeList
 {
     stperf_PerfNode** _elements;
     uint64_t          _size;
+    uint64_t          _thread_id;
+};
+
+extern "C" struct stperf_PerfNodeThreadList
+{
+    stperf_PerfNodeList* _elements;
+    uint64_t             _size;
 };
 
 extern "C" struct stperf_PerfNode
@@ -87,13 +104,15 @@ extern "C" struct stperf_PerfNode
     stperf_PerfNodeList _children;
 };
 
-extern "C" uint64_t            stperf_StartProf(const char* name, int line, const char* suffix);
-extern "C" void                stperf_StopProf(uint64_t handle);
-extern "C" stperf_PerfNodeList stperf_GetCallTree();
-extern "C" const char*         stperf_GetCallTreeString(stperf_PerfNodeList tree);
-extern "C" void                stperf_FreeCallTreeString(const char* string);
-extern "C" void                stperf_FreeCallTree(stperf_PerfNodeList root);
-extern "C" void                stperf_ResetCounters();
+extern "C" uint64_t                  stperf_StartProf(const char* name, int line, const char* suffix);
+extern "C" void                      stperf_StopProf(uint64_t handle);
+extern "C" stperf_PerfNodeThreadList stperf_GetCallTree();
+extern "C" stperf_PerfNodeList*      stperf_GetThreadRoot(const stperf_PerfNodeThreadList* tree, uint64_t tid);
+extern "C" const char*               stperf_GetCallTreeString(stperf_PerfNodeThreadList tree);
+extern "C" void                      stperf_FreeCallTreeString(const char* string);
+extern "C" void                      stperf_FreeCallTree(stperf_PerfNodeThreadList tree);
+extern "C" void                      stperf_ResetCounters();
+extern "C" uint64_t                  stperf_GetCurrentThreadId();
 
 #define _CAT_NAME(x,y) x##y
 #define CAT_NAME(x,y) _CAT_NAME(x,y)
