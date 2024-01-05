@@ -6,7 +6,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 include(FetchContent)
 
 add_library(stperf STATIC stperf.cpp)
-target_compile_options(stperf PUBLIC -Wall -Wextra -pedantic -O3)
+target_compile_options(stperf PRIVATE -Wall -Wextra -pedantic -O3)
 
 # Enable testing only for direct compilations
 if(${CMAKE_SOURCE_DIR} STREQUAL ${CMAKE_CURRENT_SOURCE_DIR})
