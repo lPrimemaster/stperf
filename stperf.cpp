@@ -331,9 +331,15 @@ extern "C" uint64_t stperf_StartProf(const char* name, int line, const char* suf
 {
     std::uint64_t sid = std::hash<std::string>()(name); // BUG: (César) This could have collisions
     std::string isuffix = suffix != nullptr ? suffix : "";
-    auto perf_timer = cag::PerfTimer::MakePerfTimer(std::string(name), line, isuffix);
-    perf_timers.emplace(sid, perf_timer);
-    perf_timer->start();
+
+    // Get or create timer
+    auto it = perf_timers.find(sid);
+    if(it == perf_timers.end())
+    {
+        auto perf_timer = cag::PerfTimer::MakePerfTimer(std::string(name), line, isuffix);
+        it = perf_timers.emplace(sid, perf_timer).first;
+    }
+    it->second->start();
     return sid;
 }
 
