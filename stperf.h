@@ -15,6 +15,8 @@
 
 namespace cag
 {
+    class PerfTimer;
+
     struct PerfNode
     {
         enum class Granularity { S, MS, US, NS } _granularity;
@@ -29,14 +31,8 @@ namespace cag
 
         void print(std::stringstream& ss) const;
     };
-
-    // class CallTree : public std::unordered_map<std::thread::id, std::vector<PerfNode>>
-    // {
-    // public:
-    //     std::vector<PerfNode>& get_current_thread()
-    // };
-
-    class PerfTimer
+    
+    class PerfTimer : public std::enable_shared_from_this<PerfTimer>
     {
     private:
         PerfTimer(const std::string& name, int line, const std::string& suffix);
@@ -46,8 +42,9 @@ namespace cag
         std::chrono::high_resolution_clock::time_point _tp;
         std::string _scope_name;
         int _line;
-        static std::unordered_map<std::thread::id, std::stack<PerfNode*>> _scope_stack;
-        static std::unordered_map<std::thread::id, std::vector<PerfNode>> _parents;
+        static std::unordered_map<std::thread::id, std::stack<std::weak_ptr<const PerfTimer>>> _timer_stack;
+        static std::unordered_map<std::thread::id, std::stack<PerfNode*>>  _scope_stack;
+        static std::unordered_map<std::thread::id, std::vector<PerfNode>>  _parents;
         static std::mutex _scope_stack_guard;
     
         void addLeaf() const;
@@ -56,10 +53,11 @@ namespace cag
     public:
         static std::shared_ptr<PerfTimer> MakePerfTimer(const std::string& name, int line, const std::string& suffix = "");
         static void ResetCounters();
+        static void StopCounters();
         static std::string GetCallTreeString(const std::unordered_map<std::thread::id, std::vector<PerfNode>>& tree);
         static std::unordered_map<std::thread::id, std::vector<PerfNode>> GetCallTree();
         void start();
-        void stop();
+        void stop() const;
     };
 
     template<typename T>
@@ -106,6 +104,7 @@ extern "C" struct stperf_PerfNode
 
 extern "C" uint64_t                  stperf_StartProf(const char* name, int line, const char* suffix);
 extern "C" void                      stperf_StopProf(uint64_t handle);
+extern "C" void                      stperf_StopCounters();
 extern "C" stperf_PerfNodeThreadList stperf_GetCallTree();
 extern "C" stperf_PerfNodeList*      stperf_GetThreadRoot(const stperf_PerfNodeThreadList* tree, uint64_t tid);
 extern "C" const char*               stperf_GetCallTreeString(stperf_PerfNodeThreadList tree);

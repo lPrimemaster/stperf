@@ -2,6 +2,7 @@
 // This code is licensed under MIT license (see LICENSE for details)
 
 #include "stperf.h"
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <functional>
@@ -48,6 +49,7 @@ void cag::PerfNode::print(std::stringstream& ss) const
 // =================================
 // PerfTimer
 // =================================
+decltype(cag::PerfTimer::_timer_stack) cag::PerfTimer::_timer_stack;
 decltype(cag::PerfTimer::_scope_stack) cag::PerfTimer::_scope_stack;
 decltype(cag::PerfTimer::_parents) cag::PerfTimer::_parents;
 decltype(cag::PerfTimer::_scope_stack_guard) cag::PerfTimer::_scope_stack_guard;
@@ -64,7 +66,7 @@ void cag::PerfTimer::start()
     addLeaf();
 }
 
-void cag::PerfTimer::stop()
+void cag::PerfTimer::stop() const
 {
     // Stack is invalid (Maybe a reset call was issued during this prof)
     if(_scope_stack.empty()) return;
@@ -96,9 +98,11 @@ void cag::PerfTimer::addLeaf() const
     if(_scope_stack.find(std::this_thread::get_id()) == _scope_stack.end())
     {
         std::lock_guard<std::mutex> lock(_scope_stack_guard);
+        _timer_stack.emplace(std::this_thread::get_id(), std::stack<std::weak_ptr<const PerfTimer>>());
         _scope_stack.emplace(std::this_thread::get_id(), std::stack<PerfNode*>());
         _parents.emplace(std::this_thread::get_id(), std::vector<PerfNode>());
     }
+    auto& timer_stack = _timer_stack.at(std::this_thread::get_id());
     auto& thread_stack = _scope_stack.at(std::this_thread::get_id());
     auto& thread_parents = _parents.at(std::this_thread::get_id());
 
@@ -113,10 +117,13 @@ void cag::PerfTimer::addLeaf() const
         top->_children.emplace_back();
         thread_stack.push(&top->_children.back());
     }
+
+    timer_stack.push(shared_from_this());
 }
 
 void cag::PerfTimer::delLeaf() const
 {
+    _timer_stack.at(std::this_thread::get_id()).pop();
     _scope_stack.at(std::this_thread::get_id()).pop();
 }
 
@@ -182,6 +189,23 @@ void cag::PerfTimer::ResetCounters()
     std::lock_guard<std::mutex> lock(_scope_stack_guard);
     _parents.clear();
     _scope_stack.clear();
+    _timer_stack.clear();
+}
+
+
+void cag::PerfTimer::StopCounters()
+{
+    // Stop all the running counters ordered for all threads
+    std::lock_guard<std::mutex> lock(_scope_stack_guard);
+    for(auto& stack : _timer_stack)
+    {
+        while(!stack.second.empty())
+        {
+            auto top_timer = stack.second.top();
+            top_timer.lock()->stop();
+            stack.second.pop();
+        }
+    }
 }
 
 static cag::PerfNode ReduceChildren(const std::vector<std::vector<cag::PerfNode>::const_iterator>& nodes)
@@ -351,6 +375,11 @@ extern "C" void stperf_StopProf(uint64_t handle)
     if(perf_timer == perf_timers.end()) return; 
     
     perf_timer->second->stop();
+}
+
+extern "C" void stperf_StopCounters()
+{
+    cag::PerfTimer::StopCounters();
 }
 
 static stperf_PerfNode* ToCHeapNode(const cag::PerfNode& node)
