@@ -95,6 +95,20 @@ TEST_CASE("Nested Scope Guard", "[nested][auto]")
     REQUIRE(tree.at(std::this_thread::get_id()).at(0)._children.at(0)._value < 33);
 }
 
+TEST_CASE("Scope Guard Manual Stop", "[auto][manualstop]")
+{
+    {
+        ST_PROF;
+        sleep_simple();
+        cag::PerfTimer::StopCounters();
+
+        // Do whatever
+        
+        // Reset always needed or we crash here
+        cag::PerfTimer::ResetCounters();
+    }
+}
+
 TEST_CASE("Nested Manual Trigger", "[nested][manual]")
 {
     cag::PerfTimer::ResetCounters();
