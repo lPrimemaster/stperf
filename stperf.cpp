@@ -199,7 +199,6 @@ void cag::PerfTimer::StopCounters()
     std::lock_guard<std::mutex> lock(_scope_stack_guard);
     for(auto& stack : _timer_stack)
     {
-        std::cout << stack.second.size() << std::endl;
         while(!stack.second.empty())
         {
             auto& top_timer = stack.second.top();
