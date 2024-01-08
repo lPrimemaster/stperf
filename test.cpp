@@ -231,6 +231,29 @@ TEST_CASE("C API", "[capi][auto][simple]")
     stperf_FreeCallTree(nodes_all_threads);
 }
 
+TEST_CASE("C API Loop", "[capi][auto][simple]")
+{
+    stperf_ResetCounters();
+    uint64_t handle = stperf_StartProf("C API Loop", __LINE__, NULL);
+    
+    for(int i = 0; i < 100; i++)
+    {
+        uint64_t ihandle = stperf_StartProf("Loop", __LINE__, NULL);
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
+        stperf_StopProf(ihandle);
+    }
+
+    stperf_StopProf(handle);
+
+    stperf_PerfNodeThreadList nodes_all_threads = stperf_GetCallTree();
+    const char* report = stperf_GetCallTreeString(nodes_all_threads);
+
+    std::cout << report << std::endl;
+
+    stperf_FreeCallTreeString(report);
+    stperf_FreeCallTree(nodes_all_threads);
+}
+
 TEST_CASE("Multi thread", "[auto][mt]")
 {
     cag::PerfTimer::ResetCounters();
