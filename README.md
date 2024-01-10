@@ -2,6 +2,7 @@
 A tiny C/C++ performance profiling tool. Written in C++11. Its C-API allows for an implementation in almost any environment.
 
 > :warning: `stperf` is now thread safe! See `test.cpp` for examples.
+
 > :warning: `stperf` supports OpenMP. See `test.cpp` for examples.
 
 ### Installing
