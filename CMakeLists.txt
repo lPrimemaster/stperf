@@ -17,8 +17,11 @@ if(${CMAKE_SOURCE_DIR} STREQUAL ${CMAKE_CURRENT_SOURCE_DIR})
     )
     FetchContent_MakeAvailable(Catch2)
     
+    # Test OpenMP support
+    find_package(OpenMP REQUIRED)
+
     # include(CTest)
     add_executable(stperf-test test.cpp)
-    target_link_libraries(stperf-test PRIVATE stperf pthread Catch2::Catch2WithMain)
+    target_link_libraries(stperf-test PRIVATE stperf pthread Catch2::Catch2WithMain OpenMP::OpenMP_CXX)
     # add_test(NAME TestSuite COMMAND stperf-test)
 endif()

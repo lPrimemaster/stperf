@@ -333,6 +333,25 @@ TEST_CASE("C API Multi thread", "[capi][mt]")
     stperf_FreeCallTree(nodes);
 }
 
+TEST_CASE("OpenMP Test", "[auto][mt][omp]")
+{
+    cag::PerfTimer::ResetCounters();
+    {
+        ST_PROF;
+        int x = 0;
+        #pragma omp parallel for num_threads(10) reduction(+:x)
+        for(int i = 0; i < 100; i++)
+        {
+            ST_PROF_NAMED("OMP Loop");
+            x++;
+        }
+    }
+
+    auto tree = cag::PerfTimer::GetCallTree();
+
+    REQUIRE(tree.size() == 10); // OpenMP also uses the calling thread as a worker
+}
+
 // Can also be a lambda function
 int func_to_profile(int arg)
 {
