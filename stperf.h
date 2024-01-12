@@ -56,6 +56,7 @@ namespace cag
         static void StopCounters();
         static std::string GetCallTreeString(const std::unordered_map<std::thread::id, std::vector<PerfNode>>& tree);
         static std::unordered_map<std::thread::id, std::vector<PerfNode>> GetCallTree();
+        static std::string GetCallTreeDot(const std::unordered_map<std::thread::id, std::vector<PerfNode>>& tree);
         void start();
         void stop() const;
     };
@@ -106,6 +107,7 @@ extern "C" uint64_t                  stperf_StartProf(const char* name, int line
 extern "C" void                      stperf_StopProf(uint64_t handle);
 extern "C" void                      stperf_StopCounters();
 extern "C" stperf_PerfNodeThreadList stperf_GetCallTree();
+extern "C" const char*               stperf_GetCallTreeDot();
 extern "C" stperf_PerfNodeList*      stperf_GetThreadRoot(const stperf_PerfNodeThreadList* tree, uint64_t tid);
 extern "C" const char*               stperf_GetCallTreeString(stperf_PerfNodeThreadList tree);
 extern "C" void                      stperf_FreeCallTreeString(const char* string);
@@ -113,10 +115,10 @@ extern "C" void                      stperf_FreeCallTree(stperf_PerfNodeThreadLi
 extern "C" void                      stperf_ResetCounters();
 extern "C" uint64_t                  stperf_GetCurrentThreadId();
 
-#define _CAT_NAME(x,y) x##y
-#define CAT_NAME(x,y) _CAT_NAME(x,y)
-#define ST_PROF static auto CAT_NAME(_perfcounter_,__LINE__) = cag::PerfTimer::MakePerfTimer(__func__, __LINE__, "()"); \
-                cag::ScopeGuard<std::shared_ptr<cag::PerfTimer>> CAT_NAME(_scopeguard_,__LINE__)(CAT_NAME(_perfcounter_,__LINE__))
+#define _ST_CAT_NAME(x,y) x##y
+#define ST_CAT_NAME(x,y) _ST_CAT_NAME(x,y)
+#define ST_PROF static auto ST_CAT_NAME(_perfcounter_,__LINE__) = cag::PerfTimer::MakePerfTimer(__func__, __LINE__, "()"); \
+                cag::ScopeGuard<std::shared_ptr<cag::PerfTimer>> ST_CAT_NAME(_scopeguard_,__LINE__)(ST_CAT_NAME(_perfcounter_,__LINE__))
 
-#define ST_PROF_NAMED(x) static auto CAT_NAME(_perfcounter_,__LINE__) = cag::PerfTimer::MakePerfTimer(x, __LINE__); \
-                         cag::ScopeGuard<std::shared_ptr<cag::PerfTimer>> CAT_NAME(_scopeguard_,__LINE__)(CAT_NAME(_perfcounter_,__LINE__))
+#define ST_PROF_NAMED(x) static auto ST_CAT_NAME(_perfcounter_,__LINE__) = cag::PerfTimer::MakePerfTimer(x, __LINE__); \
+                         cag::ScopeGuard<std::shared_ptr<cag::PerfTimer>> ST_CAT_NAME(_scopeguard_,__LINE__)(ST_CAT_NAME(_perfcounter_,__LINE__))

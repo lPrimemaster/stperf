@@ -8,6 +8,7 @@
 #include "stperf.h"
 #include <chrono>
 #include <cstdint>
+#include <fstream>
 #include <pthread.h>
 #include <thread>
 #include <iostream>
@@ -352,6 +353,52 @@ TEST_CASE("OpenMP Test", "[auto][mt][omp]")
     REQUIRE(tree.size() == 10); // OpenMP also uses the calling thread as a worker
 }
 
+TEST_CASE("Dotfile output", "[auto][dot]")
+{
+    cag::PerfTimer::ResetCounters();
+
+    {
+        ST_PROF;
+        // Guess who's back...
+        for(int i = 0; i < 10; i++)
+        {
+            ST_PROF_NAMED("scoped_prof");
+        }
+        {
+            ST_PROF_NAMED("scoped_prof2");
+        }
+    }
+
+    auto tree = cag::PerfTimer::GetCallTree();
+    std::cout << cag::PerfTimer::GetCallTreeString(tree) << std::endl;
+    std::ofstream out("output.dot");
+    out << cag::PerfTimer::GetCallTreeDot(tree) << std::endl;
+}
+
+TEST_CASE("Dotfile C output", "[auto][capi][dot]")
+{
+    stperf_ResetCounters();
+    
+    uint64_t handle = stperf_StartProf(__func__, __LINE__, NULL);
+    // Guess who's back...
+    for(int i = 0; i < 10; i++)
+    {
+        uint64_t ihandle = stperf_StartProf("scoped_prof", __LINE__, NULL);
+        sleep_10_10();
+        stperf_StopProf(ihandle);
+    }
+    {
+        uint64_t ihandle = stperf_StartProf("scoped_prof2", __LINE__, NULL);
+        sleep_simple();
+        stperf_StopProf(ihandle);
+    }
+
+    stperf_StopProf(handle);
+
+    std::ofstream out("output.dot");
+    out << stperf_GetCallTreeDot() << std::endl;
+}
+
 // Can also be a lambda function
 int func_to_profile(int arg)
 {
@@ -379,7 +426,7 @@ int func_partial_profile(int arg)
 }
 
 
-TEST_CASE("Readme Print", "[auto][simple]")
+TEST_CASE("Readme Print", "[auto][simple][readme]")
 {
     // We need to make a scope to be able to see the statistics here
     // Alternatively, you can call start/stop manually
@@ -391,6 +438,10 @@ TEST_CASE("Readme Print", "[auto][simple]")
     }
 
     // Print performance statistics
-    std::cout << cag::PerfTimer::GetCallTreeString(cag::PerfTimer::GetCallTree()) << std::endl;
+    auto tree = cag::PerfTimer::GetCallTree();
+    std::cout << cag::PerfTimer::GetCallTreeString(tree) << std::endl;
+    std::ofstream out("output.dot");
+    out << cag::PerfTimer::GetCallTreeDot(tree) << std::endl;
+
 }
 

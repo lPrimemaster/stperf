@@ -12,6 +12,7 @@
 #include <mutex>
 #include <sstream>
 #include <stack>
+#include <string>
 #include <sys/types.h>
 #include <thread>
 #include <type_traits>
@@ -344,6 +345,97 @@ std::string cag::PerfTimer::GetCallTreeString(const std::unordered_map<std::thre
     return ss.str();
 }
 
+static std::string GenDotHeader()
+{
+    return "digraph stperf_info {\nnode[shape=box];\n"; 
+}
+
+static std::string GenDotFooter()
+{
+    return "}";
+}
+
+// TODO: (César) : Switch to graphviz html tags
+static std::string GenNodeData(const cag::PerfNode& node)
+{
+    std::stringstream ss;
+    ss << " [";
+
+    // Label
+    const auto default_precision = std::cout.precision();
+    ss << "label=\"{ { " << node._name << " | {" <<
+        node._hits << " hit" << ((node._hits > 1) ? "s" : "") << " | " << 
+        node._value << cag::PerfNode::_time_suffix.at(node._granularity) << "} | " <<
+        std::setw(3) << std::setprecision(4) << 
+        node._pct * 100 << std::setprecision(default_precision) << "% } }\"";
+
+    // Color
+    ss << "style=filled fillcolor=white";
+
+    ss << "];";
+    return ss.str();
+}
+
+static void GenDotChildSection(const std::vector<cag::PerfNode>& nodes, size_t& i, std::stringstream& ss, const std::string& parent)
+{
+    for(const auto& node : nodes)
+    {
+        const std::string dot_name = "Node" + std::to_string(i++);
+        
+        // Generate self
+        ss << dot_name << GenNodeData(node) << "\n";
+        ss << parent << " -> " << dot_name << ";\n";
+        
+        // Generate children
+        if(!node._children.empty())
+        {
+            GenDotChildSection(node._children, i, ss, dot_name);
+        }
+    }
+}
+
+static std::string GenDotThreadSection(const std::vector<cag::PerfNode>& root, const std::uint64_t tid)
+{
+    std::stringstream ss;
+    ss << "subgraph cluster_stperf_info_thread_" + std::to_string(tid) + "{\n";
+    ss << "node [shape=record];\n";
+    ss << "style=filled;\n";
+    ss << "color=black;\n";
+    ss << "fillcolor=lightgrey;\n";
+    
+    size_t i = 0;
+    for(const auto& node : root)
+    {
+        const std::string dot_name = "Node" + std::to_string(i++);
+
+        if(!node._children.empty())
+        {
+            GenDotChildSection(node._children, i, ss, dot_name);
+        }
+
+        ss << dot_name << GenNodeData(node) << "\n";
+    }
+
+    ss << "label = \"Thread #" + std::to_string(tid) + "\";\n";
+    ss << "labeljust = \"l\"\n";
+    ss << "}\n";
+    return ss.str();
+}
+
+std::string cag::PerfTimer::GetCallTreeDot(const std::unordered_map<std::thread::id, std::vector<PerfNode>> &tree)
+{
+    std::string output;
+
+    output += GenDotHeader();
+    
+    for(const auto& thread_root : tree)
+    {
+        output += GenDotThreadSection(thread_root.second, GetThreadIdSFF(thread_root.first));
+    }
+
+    output += GenDotFooter();
+    return output;
+}
 
 // =================================
 // C API
@@ -454,6 +546,19 @@ extern "C" stperf_PerfNodeThreadList stperf_GetCallTree()
     }
     
     return output;
+}
+
+extern "C" const char* stperf_GetCallTreeDot()
+{
+    std::stringstream ss;
+    std::string output_s = cag::PerfTimer::GetCallTreeDot(cag::PerfTimer::GetCallTree());
+
+    char* output = new char[output_s.size() + 1];
+    // Silently ignore
+    if(output == nullptr) return nullptr;
+    memcpy(output, output_s.c_str(), output_s.size() + 1);
+    return output;
+
 }
 
 extern "C" stperf_PerfNodeList* stperf_GetThreadRoot(const stperf_PerfNodeThreadList* tree, uint64_t tid)
